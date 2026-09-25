@@ -1,6 +1,12 @@
 import json
+import sys
+from pathlib import Path
 
-def read_json(file_name):
+BASE_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+WORKFLOW_PATH = BASE_DIR / "workflow.json"
+
+
+def read_json(file_name=WORKFLOW_PATH):
     with open(file_name, 'r', encoding='utf-8') as f:
         task = json.load(f)
 
@@ -18,6 +24,5 @@ def read_json(file_name):
     return ret
 
 if __name__ == "__main__":
-    file_name = "workflow_20260530_160807.json"
-    ret = read_json(file_name)
+    ret = read_json()
     print(ret)

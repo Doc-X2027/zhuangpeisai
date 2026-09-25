@@ -102,14 +102,14 @@ class CompetitionService:
     def workflow_stage(self, image_path: Path = WORKFLOW_IMAGE, on_chunk=None, on_status=None) -> tuple[str, str, Path]:
         if not image_path.is_file():
             raise FileNotFoundError(f"工作流图片不存在：{image_path}")
-        path = BASE_DIR / f"workflow_{datetime.now():%Y%m%d_%H%M%S_%f}.json"
+        path = BASE_DIR / "workflow.json"
         workflow = prompt.generate_workflow_json(str(image_path), str(path), on_chunk=on_chunk, on_status=on_status)
         if not workflow:
             raise RuntimeError("装配工作流生成失败")
         parsed = json.loads(workflow)
         if not isinstance(parsed.get("assembly_sequence"), list):
             raise ValueError("工作流 JSON 缺少 assembly_sequence 数组")
-        command = TASK_COMMAND
+        command = read_json.read_json(path)
         with self._lock:
             self.result.workflow = json.dumps(parsed, ensure_ascii=False, indent=2)
             self.result.command_result = command
