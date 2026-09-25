@@ -1,0 +1,73 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and local configuration
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# IDE and OS metadata
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Build and packaging output
+build/
+dist/
+*.egg-info/
+*.spec
+
+# Runtime output, logs, and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+output/
+image_cache/
+
+# Project image assets and captures
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.webp
+*.tif
+*.tiff
+*.ico
+*.svg
+image/
+photo/
+
+# Vendor SDK (versioned directory names included)
+aubo_sdk*/
+aubosdk*/
+
+# Native build artifacts and archives
+*.dll
+*.lib
+*.pdb
+*.exp
+*.obj
+*.o
+*.so
+*.dylib
+*.exe
+*.zip
+*.rar
+*.7z
+
