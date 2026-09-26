@@ -1,6 +1,6 @@
 """Competition GUI. Source stays ASCII; UI copy uses Unicode escapes."""
 from __future__ import annotations
-import sys, threading, time
+import os, sys, threading, time
 from datetime import datetime
 from pathlib import Path
 from PySide6.QtCore import QObject,QThread,QTimer,Qt,Signal,Slot
@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QApplication,QFrame,QHBoxLayout,QLabel,QLineEdit,
     QPushButton,QProgressBar,QTextEdit,QVBoxLayout,QWidget)
 from competition_service import CompetitionService,IDENTIFY_IMAGE,WORKFLOW_IMAGE,cache_image_for_model
 from server_multithread import CompetitionTCPServer
+from voice_client import RemoteSpeechClient
 
 INPUT_IMAGE = Path(r"E:\photo\color.jpg")
 
@@ -82,6 +83,7 @@ class MainWindow(QMainWindow):
         self.server=CompetitionTCPServer(self.listen_host,self.listen_port,self._network_command,self._network_feedback)
         self.server_thread=threading.Thread(target=self._run_server,args=(self.server,),daemon=True)
         self.timer_started_at=None; self.countdown_seconds=300; self.timer_remaining=300; self.timer_running=False; self.timer_last_tick=None
+        self.last_voice_text=""; self.last_voice_received_at=0.0
         # Preview and model both use cached files; source documents stay read-only.
         self.stage_sources={0:INPUT_IMAGE,1:INPUT_IMAGE}; self.stage_images={}; self.image_cache_info={}
         self.input_image_signature=None
@@ -100,6 +102,7 @@ class MainWindow(QMainWindow):
             area=screen.availableGeometry(); self.setMinimumSize(area.width()//3,area.height()//3)
         else: self.setMinimumSize(640,360)
         self._build_ui(); self._start_timers(); self.server_thread.start()
+        self._start_voice_client()
 
     def _card(self):
         frame=QFrame(); frame.setObjectName('card'); return frame
@@ -134,6 +137,12 @@ class MainWindow(QMainWindow):
         self.image_path_label=QLabel("\u4f7f\u7528\u7f13\u5b58\u538b\u7f29\u56fe\u7247\uff0c\u53ef\u62d6\u5165\u56fe\u7247"); self.image_path_label.setObjectName('muted'); self.image_path_label.setWordWrap(True); ctl.addWidget(self.image_path_label)
         self.path_label=QLabel("\u4efb\u52a1\u8f93\u51fa\u5c06\u663e\u793a\u5728\u8fd9\u91cc"); self.path_label.setObjectName('muted'); self.path_label.setWordWrap(True); ctl.addWidget(self.path_label); body.addWidget(controls)
 
+        ctl.addWidget(QLabel("ARM \u8bed\u97f3\u670d\u52a1"))
+        self.voice_url_edit=QLineEdit(os.getenv("AUBO_ARM_SPEECH_BASE_URL","http://192.168.34.200:8765")); self.voice_url_edit.setToolTip("ARM \u8bed\u97f3\u670d\u52a1 HTTP \u5730\u5740"); ctl.addWidget(self.voice_url_edit)
+        voice_buttons=QHBoxLayout(); self.voice_apply_button=QPushButton("\u8fde\u63a5"); self.voice_apply_button.clicked.connect(self._apply_voice_url); voice_buttons.addWidget(self.voice_apply_button)
+        self.voice_asr_button=QPushButton("\u8bc6\u522b"); self.voice_asr_button.setEnabled(False); self.voice_asr_button.clicked.connect(self._request_voice_asr); voice_buttons.addWidget(self.voice_asr_button); ctl.addLayout(voice_buttons)
+        self.voice_status=QLabel("\u7b49\u5f85\u542f\u52a8"); self.voice_status.setObjectName('muted'); self.voice_status.setWordWrap(True); ctl.addWidget(self.voice_status)
+
         right=QVBoxLayout(); right.setSpacing(12); body.addLayout(right,1)
         image_card=self._card(); image_layout=QVBoxLayout(image_card); image_layout.setContentsMargins(14,11,14,14)
         image_layout.addWidget(QLabel("\u56fe\u7247\u5de5\u4f5c\u533a  \u00b7  \u9884\u89c8\u4e0e\u4e0a\u4f20\u5747\u4f7f\u7528 1MB \u4ee5\u4e0b\u7684\u7f13\u5b58\u56fe\u7247"))
@@ -148,6 +157,46 @@ class MainWindow(QMainWindow):
         self.clock=QTimer(self); self.clock.timeout.connect(self._update_clock); self.clock.start(1000)
         self.photo_timer=QTimer(self); self.photo_timer.timeout.connect(self._refresh_live_image); self.photo_timer.start(500)
         self.flow_timer=QTimer(self); self.flow_timer.setInterval(35); self.flow_timer.timeout.connect(self._animate_flow); self.flow_index=None; self.flow_phase=0
+
+    def _start_voice_client(self):
+        self.voice_client=RemoteSpeechClient(self.voice_url_edit.text(),self)
+        self.voice_client.status_changed.connect(self._voice_status_changed)
+        self.voice_client.recognition_received.connect(self._voice_recognition_received)
+        self.voice_client.error_received.connect(lambda message:self.append_log(f"\u8bed\u97f3\uff1a{message}"))
+        self.voice_client.start()
+
+    def _apply_voice_url(self):
+        try:
+            self.voice_client.set_base_url(self.voice_url_edit.text())
+            self.voice_url_edit.setText(self.voice_client.base_url)
+        except ValueError as exc:
+            self._voice_status_changed(str(exc),False)
+
+    def _request_voice_asr(self):
+        self.voice_client.request_asr()
+
+    @Slot(str,bool)
+    def _voice_status_changed(self,text,connected):
+        self.voice_status.setText(text); self.voice_asr_button.setEnabled(connected)
+        self.voice_status.setStyleSheet(f"color:{'#64d8cb' if connected else '#8ea2bf'};")
+
+    @Slot(str,object)
+    def _voice_recognition_received(self,text,payload):
+        now=time.monotonic()
+        if text==self.last_voice_text and now-self.last_voice_received_at<1.0: return
+        self.last_voice_text=text
+        self.last_voice_received_at=now
+        self.append_log(f"\u8bed\u97f3\u8bc6\u522b\u7ed3\u679c\uff1a{text}")
+        command_stage=None
+        if "\u6267\u884c\u4efb\u52a1\u4e00" in text: command_stage=0
+        elif "\u6267\u884c\u4efb\u52a1\u4e8c" in text: command_stage=1
+        if command_stage is None: return
+        if self.active_thread or self.network_request:
+            self.append_log(f"\u8bed\u97f3\u6307\u4ee4\u5df2\u5ffd\u7565\uff1a\u5f53\u524d\u6709\u4efb\u52a1\u6b63\u5728\u6267\u884c\uff0c\u65e0\u6cd5\u542f\u52a8\u4efb\u52a1{command_stage+1}")
+            return
+        self.append_log(f"\u8bed\u97f3\u6307\u4ee4\u5df2\u63a5\u53d7\uff1a\u6267\u884c\u4efb\u52a1{command_stage+1}")
+        self.select_stage(command_stage)
+        self._execute_stage(command_stage)
 
     def _run_server(self,server):
         try: server.serve_forever()
@@ -440,6 +489,7 @@ class MainWindow(QMainWindow):
         self.output_document+=text
         self.result_text.moveCursor(QTextCursor.MoveOperation.End); self.result_text.insertPlainText(text); self.result_text.ensureCursorVisible()
     def closeEvent(self,event):
+        self.voice_client.stop()
         self.server.shutdown()
         if self.network_request: self.network_request['response']='Process failure: application closed'; self.network_request['event'].set()
         event.accept()

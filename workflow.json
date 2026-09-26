@@ -1,0 +1,79 @@
+{
+  "task_id": "pick_place_colors",
+  "task_description": "每圈1mm，5mm加粗，共7圈，最大半径20mm",
+  "execution_mode": "sequential",
+  "assembly_sequence": [
+    {
+      "step": 1,
+      "operation": "pick",
+      "object_color": "red",
+      "action_description": "pick red block(s)"
+    },
+    {
+      "step": 2,
+      "operation": "place",
+      "object_color": "blue",
+      "action_description": "place in blue plate"
+    },
+    {
+      "step": 3,
+      "operation": "pick",
+      "object_color": "orange",
+      "action_description": "pick orange block(s)"
+    },
+    {
+      "step": 4,
+      "operation": "place",
+      "object_color": "green",
+      "action_description": "place in green plate"
+    },
+    {
+      "step": 5,
+      "operation": "pick",
+      "object_color": "yellow",
+      "action_description": "pick yellow block(s)"
+    },
+    {
+      "step": 6,
+      "operation": "place",
+      "object_color": "purple",
+      "action_description": "place in purple plate"
+    },
+    {
+      "step": 7,
+      "operation": "pick",
+      "object_color": "green",
+      "action_description": "pick green block(s)"
+    },
+    {
+      "step": 8,
+      "operation": "place",
+      "object_color": "pink",
+      "action_description": "place in pink plate"
+    },
+    {
+      "step": 9,
+      "operation": "pick",
+      "object_color": "blue",
+      "action_description": "pick blue block(s)"
+    },
+    {
+      "step": 10,
+      "operation": "place",
+      "object_color": "cyan",
+      "action_description": "place in cyan plate"
+    },
+    {
+      "step": 11,
+      "operation": "pick",
+      "object_color": "purple",
+      "action_description": "pick purple block(s)"
+    },
+    {
+      "step": 12,
+      "operation": "place",
+      "object_color": "brown",
+      "action_description": "place in brown plate"
+    }
+  ]
+}
