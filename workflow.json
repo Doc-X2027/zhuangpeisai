@@ -1,91 +1,79 @@
 {
   "task_id": "pick_place_colors",
-  "task_description": "先把红色方块放到黄色托盘上，再把绿色方块放到红色托盘上，接着把橙色方块放到蓝色托盘上，然后把蓝色方块放到橙色托盘上，再把黄色方块放到橙色托盘上，再把紫色方块放到绿色托盘上，然后把粉色方块放在红色方块上",
+  "task_description": "任务卡1",
   "execution_mode": "sequential",
   "assembly_sequence": [
     {
       "step": 1,
       "operation": "pick",
       "object_color": "red",
-      "action_description": "pick red block"
+      "action_description": "pick red block(s)"
     },
     {
       "step": 2,
       "operation": "place",
-      "object_color": "yellow",
-      "action_description": "place in yellow tray"
+      "object_color": "blue",
+      "action_description": "place in blue plate"
     },
     {
       "step": 3,
       "operation": "pick",
-      "object_color": "green",
-      "action_description": "pick green block"
+      "object_color": "orange",
+      "action_description": "pick orange block(s)"
     },
     {
       "step": 4,
       "operation": "place",
-      "object_color": "red",
-      "action_description": "place in red tray"
+      "object_color": "green",
+      "action_description": "place in green plate"
     },
     {
       "step": 5,
       "operation": "pick",
-      "object_color": "orange",
-      "action_description": "pick orange block"
+      "object_color": "yellow",
+      "action_description": "pick yellow block(s)"
     },
     {
       "step": 6,
       "operation": "place",
-      "object_color": "blue",
-      "action_description": "place in blue tray"
+      "object_color": "purple",
+      "action_description": "place in purple plate"
     },
     {
       "step": 7,
       "operation": "pick",
-      "object_color": "blue",
-      "action_description": "pick blue block"
+      "object_color": "pink",
+      "action_description": "pick pink block(s)"
     },
     {
       "step": 8,
       "operation": "place",
-      "object_color": "orange",
-      "action_description": "place in orange tray"
+      "object_color": "cyan",
+      "action_description": "place in cyan plate"
     },
     {
       "step": 9,
       "operation": "pick",
-      "object_color": "yellow",
-      "action_description": "pick yellow block"
+      "object_color": "brown",
+      "action_description": "pick brown block(s)"
     },
     {
       "step": 10,
       "operation": "place",
-      "object_color": "orange",
-      "action_description": "place in orange tray"
+      "object_color": "red",
+      "action_description": "place in red plate"
     },
     {
       "step": 11,
       "operation": "pick",
-      "object_color": "purple",
-      "action_description": "pick purple block"
+      "object_color": "blue",
+      "action_description": "pick blue block(s)"
     },
     {
       "step": 12,
       "operation": "place",
-      "object_color": "green",
-      "action_description": "place in green tray"
-    },
-    {
-      "step": 13,
-      "operation": "pick",
-      "object_color": "pink",
-      "action_description": "pick pink block"
-    },
-    {
-      "step": 14,
-      "operation": "place",
-      "object_color": "yellow",
-      "action_description": "place in yellow tray (on top of red block)"
+      "object_color": "orange",
+      "action_description": "place in orange plate"
     }
   ]
 }

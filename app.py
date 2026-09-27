@@ -1,6 +1,6 @@
 """Competition GUI. Source stays ASCII; UI copy uses Unicode escapes."""
 from __future__ import annotations
-import os, sys, threading, time
+import os, re, sys, threading, time
 import hikvision
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +15,22 @@ from server_multithread import CompetitionTCPServer
 from voice_client import RemoteSpeechClient
 
 INPUT_IMAGE = Path(r"E:\photo\color.jpg")
+WAKE_WORDS = ("小具同学",)
+VOICE_COMMANDS = (("执行任务一", 0), ("执行任务二", 1))
+
+def task_one_spoken_names(text):
+    """Return only object names from Qwen's ``**name**: description`` output."""
+    text=str(text or "")
+    headings=re.findall(r"\*\*(.+?)\*\*\s*[：:]",text,flags=re.S)
+    if not headings:
+        headings=re.findall(r"(?:^|\n)\s*(?:[-*]\s*)?(?:\d+[.、]\s*)?([^\n：:]{1,40})[：:]",text)
+    names=[]
+    for heading in headings:
+        name=re.sub(r"^\s*(?:识别示例|识别结果|物体名称)\s*[：:]\s*","",heading.strip())
+        name=re.sub(r"^\s*\d+[.、]\s*","",name).strip(" *#\t\r\n")
+        if name and name not in names:
+            names.append(name)
+    return "、".join(names)
 
 def detect_local_ip():
     """Return the configured physical Ethernet IPv4, even when its cable is unplugged."""
@@ -107,6 +123,8 @@ class MainWindow(QMainWindow):
         self.last_voice_text=""; self.last_voice_received_at=0.0
         self.awaiting_voice_command=False
         self.voice_triggered_stage=None
+        self.voice_task_listening_paused=False
+        self.voice_result_tts_pending=False
         self.pending_robot_command=None
         self.pending_robot_command_lock=threading.Lock()
         # Preview and model both use cached files; source documents stay read-only.
@@ -192,6 +210,7 @@ class MainWindow(QMainWindow):
         self.voice_client=RemoteSpeechClient(base_url,self,auto_listen=True,events_enabled=False)
         self.voice_client.status_changed.connect(self._voice_status_changed)
         self.voice_client.recognition_received.connect(self._voice_recognition_received)
+        self.voice_client.tts_finished.connect(self._voice_tts_finished)
         self.voice_client.error_received.connect(lambda message:self.append_log(f"\u8bed\u97f3\uff1a{message}"))
         self.voice_client.start()
 
@@ -216,16 +235,15 @@ class MainWindow(QMainWindow):
         self.last_voice_text=text
         self.last_voice_received_at=now
         self.append_log(f"\u8bed\u97f3\u8bc6\u522b\u7ed3\u679c\uff1a{text}")
-        if "小具同学" in text:
+        matched_wake_word=next((word for word in WAKE_WORDS if word in text),None)
+        if matched_wake_word:
             self.awaiting_voice_command=True
             self.append_log("检测到唤醒词，正在播报就绪提示")
             self.voice_client.listen_for_command_after_tts("我已就绪，请下达指令")
-            text=text.replace("小具同学","",1).strip(" ，,。！？!?")
+            text=text.replace(matched_wake_word,"",1).strip(" ，,。！？!?")
             if not text:
                 return
-        command_stage=None
-        if "\u4efb\u52a1\u4e00" in text: command_stage=0
-        elif "\u4efb\u52a1\u4e8c" in text: command_stage=1
+        command_stage=next((stage for command,stage in VOICE_COMMANDS if command in text),None)
         if command_stage is None: return
         self.awaiting_voice_command=False
         if self.active_thread or self.network_request:
@@ -233,8 +251,25 @@ class MainWindow(QMainWindow):
             return
         self.append_log(f"\u8bed\u97f3\u6307\u4ee4\u5df2\u63a5\u53d7\uff1a\u6267\u884c\u4efb\u52a1{command_stage+1}")
         self.voice_triggered_stage=command_stage
+        self.voice_task_listening_paused=True
+        self.voice_client.pause_auto_listen()
         self.select_stage(command_stage)
         self._execute_stage(command_stage)
+
+    @Slot(str,bool)
+    def _voice_tts_finished(self,_text,_ok):
+        if not self.voice_result_tts_pending:
+            return
+        self.voice_result_tts_pending=False
+        self._resume_voice_after_result()
+
+    def _resume_voice_after_result(self):
+        if not self.voice_task_listening_paused or self.active_thread or self.voice_result_tts_pending:
+            return
+        self.voice_task_listening_paused=False
+        self.voice_triggered_stage=None
+        self.voice_client.resume_auto_listen()
+        self.append_log("大模型识别结果播报完成，已恢复唤醒监听")
 
     def _run_server(self,server):
         try: server.serve_forever()
@@ -449,8 +484,19 @@ class MainWindow(QMainWindow):
         camera_host=self.local_ip_edit.text().strip()
         def captured_image(stage,status):
             status(f"正在向本机拍照服务 {camera_host}:6000 发送 123…")
-            hikvision.one_shot(camera_host)
-            status("拍照完成，正在读取最新图片…")
+            try:
+                hikvision.one_shot(camera_host)
+                status("拍照完成，正在读取最新图片…")
+            except (ConnectionRefusedError,TimeoutError,OSError) as exc:
+                if not INPUT_IMAGE.is_file():
+                    raise RuntimeError(
+                        f"拍照服务 {camera_host}:6000 不可用，且备用图片不存在：{INPUT_IMAGE}"
+                    ) from exc
+                updated_at=datetime.fromtimestamp(INPUT_IMAGE.stat().st_mtime)
+                status(
+                    f"拍照服务 {camera_host}:6000 不可用（{exc}）；"
+                    f"已改用磁盘最新图片（{updated_at:%H:%M:%S}）：{INPUT_IMAGE}"
+                )
             return self._reload_stage_image(stage)
         functions=[lambda callback,status:self.service.identify_stage(captured_image(0,status),callback,status),lambda callback,status:self.service.workflow_stage(captured_image(1,status),callback,status),lambda _callback,_status:self.service.log_stage()]
         self.stream_started=False; self.stage_documents[index]=""
@@ -461,6 +507,7 @@ class MainWindow(QMainWindow):
 
     def _thread_finished(self):
         self.active_thread=None; self.active_worker=None; self.select_stage(self.selected_stage)
+        self._resume_voice_after_result()
 
     def _start_flow(self,index):
         self.flow_index=index; self.flow_phase=0
@@ -486,8 +533,14 @@ class MainWindow(QMainWindow):
         if text.startswith("QWEN_VL_RESULT\x00"):
             _marker,content=text.split("\x00",1)
             if content.strip():
-                self.append_log("正在播报视觉大模型识别结果")
-                self.voice_client.request_tts(content.strip())
+                spoken_text=task_one_spoken_names(content) if index==0 else content.strip()
+                if not spoken_text:
+                    self.append_log("任务一识别结果中未找到可播报的物体名称")
+                    return
+                if self.voice_task_listening_paused and self.voice_triggered_stage==index:
+                    self.voice_result_tts_pending=True
+                self.append_log(f"正在播报 qwen-vl-plus 识别内容：{spoken_text}")
+                self.voice_client.request_tts(spoken_text)
             return
         if text.startswith("MODEL_STREAM_START\x00"):
             _marker,label=text.split("\x00",1)
@@ -526,7 +579,6 @@ class MainWindow(QMainWindow):
             self.robot_command_status.setStyleSheet("color:#ffd666;font-size:12px;")
             self.append_log(waiting_message)
             self.append_log("正在启动机械臂工程")
-            self.voice_triggered_stage=None
             self._start_robot_project()
             self.append_log("02 \u6307\u4ee4\u5947\u5076\u524d\u7f00\uff1a"+";".join(f"{1 if index%2 else 2}{value}" for index,value in enumerate((item for item in command.split(";") if item),1))+";")
         else:

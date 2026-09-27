@@ -108,14 +108,17 @@ class RemoteSpeechClient(QObject):
             self.error_received.emit("语音服务尚未连接")
             return
         if wakeup_required is None:
-            wakeup_required = self._next_wakeup_required
+            # Use short-utterance ASR and let the Windows client match the exact
+            # phrase.  The packaged keyword table accepts several homophones,
+            # so it cannot enforce an exact "小具同学" match by itself.
+            wakeup_required = False
         self._next_wakeup_required = True
         payload = {
             "request_id": str(uuid.uuid4()),
             "mode": "live_capture",
             "wakeup_required": wakeup_required,
-            "start_timeout_s": 5.0,
-            "max_record_seconds": 10.0,
+            "start_timeout_s": 2.0,
+            "max_record_seconds": 6.0,
             "vad_threshold": 0.5,
             "language": "zh-CN",
         }
@@ -153,6 +156,15 @@ class RemoteSpeechClient(QObject):
         self._tts_pending = True
         reply = self.http.post(request, QByteArray(json.dumps(payload, ensure_ascii=False).encode("utf-8")))
         reply.finished.connect(lambda reply=reply, text=text: self._handle_tts_reply(reply, text))
+
+    def pause_auto_listen(self) -> None:
+        """Stop starting new ASR requests while a voice-triggered task is running."""
+        self.auto_listen = False
+
+    def resume_auto_listen(self) -> None:
+        """Resume wake-word listening after task-result playback has finished."""
+        self.auto_listen = True
+        self._schedule_asr()
 
     def listen_for_command_after_tts(self, text: str) -> None:
         """Acknowledge a wake word, then capture one command without another wake word."""
@@ -224,7 +236,9 @@ class RemoteSpeechClient(QObject):
                 raise ValueError("响应不是 JSON 对象")
             if not payload.get("ok"):
                 error_code = payload.get("error_code", "ASR_FAILED")
-                if not (self.auto_listen and error_code in ("WAKEUP_TIMEOUT", "ASR_TIMEOUT")):
+                if not (self.auto_listen and error_code in (
+                    "WAKEUP_TIMEOUT", "ASR_TIMEOUT", "NO_SPEECH_DETECTED"
+                )):
                     self.error_received.emit(f"{error_code}：{payload.get('message', '语音识别失败')}")
                 return
             digest = payload.get("result_digest") or {}

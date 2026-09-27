@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Business wake phrase. Exact matching is performed by the Windows ASR client.
 KEYWORD="小具同学"
 
 CONFIG_CANDIDATES=(
