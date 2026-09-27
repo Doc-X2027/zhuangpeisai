@@ -15,7 +15,7 @@ from server_multithread import CompetitionTCPServer
 from voice_client import RemoteSpeechClient
 
 INPUT_IMAGE = Path(r"E:\photo\color.jpg")
-WAKE_WORDS = ("小具同学",)
+WAKE_WORDS = ("小聚同学",)
 VOICE_COMMANDS = (("执行任务一", 0), ("执行任务二", 1))
 
 def task_one_spoken_names(text):

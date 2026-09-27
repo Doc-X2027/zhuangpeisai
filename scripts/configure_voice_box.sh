@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Business wake phrase. Exact matching is performed by the Windows ASR client.
-KEYWORD="小具同学"
+KEYWORD="小聚同学"
 
 CONFIG_CANDIDATES=(
     "/home/bst/SpeechRelease/SpeechReleaseServer/speech_server.json"

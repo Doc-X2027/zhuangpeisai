@@ -118,8 +118,9 @@ def generate_workflow_json(image_path, file_name, on_chunk=None, on_status=None)
         "6. object_color 只允许 red、orange、yellow、green、blue、purple、pink、cyan、brown。"
         "颜色数字编码固定为 red=1、orange=2、yellow=3、green=4、blue=5、purple=6、pink=7、cyan=8、brown=9。\n"
         "7. 任务可在原始六组抓放（12 步）后增加句段，例如‘把粉色方块放到红色方块上’。"
-        "此类表述中，前一个颜色是待抓取物块 obj；后一个颜色指向目标物块的颜色。\n"
-        "8. 每个新增句段只增加两个步骤：第一步 pick 的 object_color 是 obj 颜色，第二步 place 的 object_color 是解析后的 target 托盘颜色。"
+        "此类表述中，前一个颜色是待抓取物块 obj；后一个颜色 X 是放置目标物块的颜色。\n"
+        "8. 每个新增句段只增加两个步骤：第一步 pick 的 object_color 是 obj 颜色，第二步 place 的 object_color 必须是用户原文‘放置在/放到 X 色物块上’中的 X 色。"
+        "不得根据 X 色物块之前所在的托盘、位置或任何前文改写该颜色。"
         "如原任务有 12 步，一个新增句段的结果必须为 14 步；若分别新增粉色、青色、棕色三个物块的抓放句段，则每个句段各增加两步。\n"
         "9. 只输出合法 JSON，不得输出解释、注释、Markdown 或代码围栏。\n"
         "格式示例：\n"
@@ -127,8 +128,8 @@ def generate_workflow_json(image_path, file_name, on_chunk=None, on_status=None)
         '"execution_mode":"sequential","assembly_sequence":['
         '{"step":1,"operation":"pick","object_color":"red","action_description":"pick red block(s)"},'
         '{"step":2,"operation":"place","object_color":"blue","action_description":"place in blue plate"}]}\n'
-        "间接指代示例：若前文是‘把红色方块放到蓝色托盘’，后文新增‘把粉色方块放到红色方块上’，"
-        "则新增两步必须是 pick pink 和 place blue；即 obj=pink(编码7)、target=blue(编码5)，绝不是 target=red。")
+        "物块放置示例：若前文是‘把红色方块放到蓝色托盘’，后文新增‘把粉色方块放到红色方块上’，"
+        "则新增两步必须是 pick pink 和 place red；即 obj=pink(编码7)、target=red(编码1)，绝不能输出 blue 或其他颜色。")
 
     def parse_and_validate(response):
         cleaned=response.strip()

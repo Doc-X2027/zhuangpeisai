@@ -110,7 +110,7 @@ class RemoteSpeechClient(QObject):
         if wakeup_required is None:
             # Use short-utterance ASR and let the Windows client match the exact
             # phrase.  The packaged keyword table accepts several homophones,
-            # so it cannot enforce an exact "小具同学" match by itself.
+            # so it cannot enforce an exact "小聚同学" match by itself.
             wakeup_required = False
         self._next_wakeup_required = True
         payload = {
