@@ -36,7 +36,7 @@ class CompetitionTCPServer:
             lowered=first_data.lower()
             command=next((name for name in ("identify","planning","auto") if lowered.startswith(name.encode("ascii"))),"")
             initial_feedback=first_data[len(command):] if command else b""
-            if lowered.strip()==b"read" and self.read_handler:
+            if lowered.strip(b"\x00\r\n\t ")==b"read" and self.read_handler:
                 response=self.read_handler(addr)
             elif command not in ("identify","planning","auto"):
                 text=first_data.decode("utf-8",errors="replace")

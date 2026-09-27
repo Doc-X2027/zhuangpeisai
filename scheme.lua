@@ -12,7 +12,7 @@
 local socket = require("socket")
 
 -- ==================== parameters ====================
-local SERVER_IP = "192.168.34.100"  -- PC Ethernet address running app.py
+local SERVER_IP = "192.168.34.99"   -- VMware VMnet8 host address running app.py
 local SERVER_PORT = 8888            -- app.py TCP listener
 local REQUEST = "planning"           -- app.py command: identify, planning, or auto
 local TIMEOUT = 600                  -- model request may take several minutes

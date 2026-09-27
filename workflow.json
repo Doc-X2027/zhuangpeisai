@@ -1,6 +1,6 @@
 {
   "task_id": "pick_place_colors",
-  "task_description": "先把红色方块放到黄色托盘上，再把绿色方块放到红色托盘上，接着把橙色方块放到蓝色托盘上，然后把蓝色方块放到紫色托盘上，再把黄色方块放到橙色托盘上，再把紫色方块放到绿色托盘上，然后把粉色方块放在红色方块上",
+  "task_description": "先把红色方块放到黄色托盘上，再把绿色方块放到红色托盘上，接着把橙色方块放到蓝色托盘上，然后把蓝色方块放到橙色托盘上，再把黄色方块放到橙色托盘上，再把紫色方块放到绿色托盘上，然后把粉色方块放在红色方块上",
   "execution_mode": "sequential",
   "assembly_sequence": [
     {
@@ -13,7 +13,7 @@
       "step": 2,
       "operation": "place",
       "object_color": "yellow",
-      "action_description": "place in yellow plate"
+      "action_description": "place in yellow tray"
     },
     {
       "step": 3,
@@ -25,7 +25,7 @@
       "step": 4,
       "operation": "place",
       "object_color": "red",
-      "action_description": "place in red plate"
+      "action_description": "place in red tray"
     },
     {
       "step": 5,
@@ -37,7 +37,7 @@
       "step": 6,
       "operation": "place",
       "object_color": "blue",
-      "action_description": "place in blue plate"
+      "action_description": "place in blue tray"
     },
     {
       "step": 7,
@@ -48,8 +48,8 @@
     {
       "step": 8,
       "operation": "place",
-      "object_color": "purple",
-      "action_description": "place in purple plate"
+      "object_color": "orange",
+      "action_description": "place in orange tray"
     },
     {
       "step": 9,
@@ -61,7 +61,7 @@
       "step": 10,
       "operation": "place",
       "object_color": "orange",
-      "action_description": "place in orange plate"
+      "action_description": "place in orange tray"
     },
     {
       "step": 11,
@@ -73,7 +73,7 @@
       "step": 12,
       "operation": "place",
       "object_color": "green",
-      "action_description": "place in green plate"
+      "action_description": "place in green tray"
     },
     {
       "step": 13,
@@ -85,7 +85,7 @@
       "step": 14,
       "operation": "place",
       "object_color": "yellow",
-      "action_description": "place in yellow plate (on top of red block)"
+      "action_description": "place in yellow tray (on top of red block)"
     }
   ]
 }

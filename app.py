@@ -1,11 +1,12 @@
 """Competition GUI. Source stays ASCII; UI copy uses Unicode escapes."""
 from __future__ import annotations
-import os, socket, sys, threading, time
+import os, sys, threading, time
 import hikvision
 from datetime import datetime
 from pathlib import Path
 from PySide6.QtCore import QObject,QThread,QTimer,Qt,Signal,Slot
 from PySide6.QtGui import QColor,QFont,QIntValidator,QPixmap,QTextCursor
+from PySide6.QtNetwork import QAbstractSocket,QNetworkInterface
 from PySide6.QtWidgets import (QApplication,QFrame,QHBoxLayout,QLabel,QLineEdit,QMainWindow,
     QPushButton,QProgressBar,QTextEdit,QVBoxLayout,QWidget)
 from competition_service import CompetitionService,IDENTIFY_IMAGE,WORKFLOW_IMAGE,cache_image_for_model
@@ -16,19 +17,19 @@ from voice_client import RemoteSpeechClient
 INPUT_IMAGE = Path(r"E:\photo\color.jpg")
 
 def detect_local_ip():
-    """Return the preferred LAN IPv4 address without sending network data."""
-    try:
-        with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as probe:
-            probe.connect(("192.168.34.200",8765))
-            address=probe.getsockname()[0]
-            if address and not address.startswith("127."): return address
-    except OSError:
-        pass
-    try:
-        addresses=socket.gethostbyname_ex(socket.gethostname())[2]
-        return next((address for address in addresses if not address.startswith("127.")),"未检测到")
-    except OSError:
-        return "未检测到"
+    """Return the configured physical Ethernet IPv4, even when its cable is unplugged."""
+    for interface in QNetworkInterface.allInterfaces():
+        label=f"{interface.name()} {interface.humanReadableName()}".lower()
+        is_ethernet="以太网" in label or "ethernet" in label
+        if not is_ethernet or any(virtual in label for virtual in ("vmware","virtual","vbox")):
+            continue
+        for entry in interface.addressEntries():
+            address=entry.ip()
+            text=address.toString()
+            if (address.protocol()==QAbstractSocket.NetworkLayerProtocol.IPv4Protocol
+                    and not text.startswith(("127.","169.254."))):
+                return text
+    return "未检测到以太网 IP"
 
 STYLE="""
 QWidget { background:#0b1220; color:#dce7f7; font-family:'Microsoft YaHei UI'; font-size:14px; }
@@ -99,7 +100,6 @@ class MainWindow(QMainWindow):
         self.bridge=NetworkBridge(); self.bridge.request.connect(self._accept_network_request); self.bridge.feedback.connect(self._accept_feedback)
         self.bridge.command_delivery.connect(self._command_delivery_finished)
         self.listen_host,self.listen_port="0.0.0.0",8888; self.server_error=None; self.listener_status_error=False
-        self.command_target_host=os.getenv("TASK_COMMAND_HOST","192.168.34.10")
         self.command_target_port=int(os.getenv("TASK_COMMAND_PORT","8888"))
         self.server=CompetitionTCPServer(self.listen_host,self.listen_port,self._network_command,self._network_feedback,self._robot_read_command)
         self.server_thread=threading.Thread(target=self._run_server,args=(self.server,),daemon=True)
@@ -160,12 +160,15 @@ class MainWindow(QMainWindow):
         self.task_copy=QLabel(); self.task_copy.setObjectName('muted'); self.task_copy.setWordWrap(True); self.task_copy.setMinimumHeight(42); ctl.addWidget(self.task_copy)
         self.progress=QProgressBar(); self.progress.setRange(0,100); ctl.addWidget(self.progress); ctl.addStretch()
         network_title=QLabel("网络信息"); network_title.setObjectName('status'); ctl.addWidget(network_title)
-        ctl.addWidget(QLabel("本机 IP（自动读取）"))
-        self.local_ip_edit=QLineEdit(detect_local_ip()); self.local_ip_edit.setReadOnly(True); ctl.addWidget(self.local_ip_edit)
+        ctl.addWidget(QLabel("本机 IP（自动读取，可手动覆盖）"))
+        self.local_ip_edit=QLineEdit(detect_local_ip()); ctl.addWidget(self.local_ip_edit)
         ctl.addWidget(QLabel("机器人 IP（手动输入）"))
-        self.robot_ip_edit=QLineEdit("192.168.34.300"); ctl.addWidget(self.robot_ip_edit)
+        self.robot_ip_edit=QLineEdit("192.168.34.10"); ctl.addWidget(self.robot_ip_edit)
+        self.robot_command_status=QLabel("机械臂指令：尚未生成")
+        self.robot_command_status.setObjectName('muted'); self.robot_command_status.setWordWrap(True)
+        ctl.addWidget(self.robot_command_status)
         ctl.addWidget(QLabel("语音盒子 IP（手动输入）"))
-        self.voice_box_ip_edit=QLineEdit("192.168.34.200"); ctl.addWidget(self.voice_box_ip_edit)
+        self.voice_box_ip_edit=QLineEdit("192.168.34.200"); self.voice_box_ip_edit.editingFinished.connect(self._apply_voice_box_ip); ctl.addWidget(self.voice_box_ip_edit)
         self.image_path_label=QLabel("\u4f7f\u7528\u7f13\u5b58\u538b\u7f29\u56fe\u7247\uff0c\u53ef\u62d6\u5165\u56fe\u7247"); self.image_path_label.setObjectName('muted'); self.image_path_label.setWordWrap(True); ctl.addWidget(self.image_path_label)
         self.path_label=QLabel("\u4efb\u52a1\u8f93\u51fa\u5c06\u663e\u793a\u5728\u8fd9\u91cc"); self.path_label.setObjectName('muted'); self.path_label.setWordWrap(True); ctl.addWidget(self.path_label); body.addWidget(controls)
 
@@ -185,12 +188,20 @@ class MainWindow(QMainWindow):
         self.flow_timer=QTimer(self); self.flow_timer.setInterval(35); self.flow_timer.timeout.connect(self._animate_flow); self.flow_index=None; self.flow_phase=0
 
     def _start_voice_client(self):
-        base_url=os.getenv("AUBO_ARM_SPEECH_BASE_URL","http://192.168.34.200:8765")
+        base_url=f"http://{self.voice_box_ip_edit.text().strip()}:8765"
         self.voice_client=RemoteSpeechClient(base_url,self,auto_listen=True,events_enabled=False)
         self.voice_client.status_changed.connect(self._voice_status_changed)
         self.voice_client.recognition_received.connect(self._voice_recognition_received)
         self.voice_client.error_received.connect(lambda message:self.append_log(f"\u8bed\u97f3\uff1a{message}"))
         self.voice_client.start()
+
+    def _apply_voice_box_ip(self):
+        if not hasattr(self,"voice_client"): return
+        try:
+            self.voice_client.set_base_url(f"http://{self.voice_box_ip_edit.text().strip()}:8765")
+            self.append_log(f"语音盒子地址已应用：{self.voice_client.base_url}")
+        except ValueError as exc:
+            self.append_log(f"语音盒子 IP 无效：{exc}")
 
     @Slot(str,bool)
     def _voice_status_changed(self,text,connected):
@@ -245,24 +256,29 @@ class MainWindow(QMainWindow):
             if command:
                 self.pending_robot_command=None
         if not command:
-            self.bridge.feedback.emit(f"机器人 {addr[0]}:{addr[1]} 请求 read，但当前没有待发送信息")
+            self.bridge.command_delivery.emit(f"机器人 {addr[0]}:{addr[1]} 已发送 read，但当前没有待发送信息",False)
             return "Process failure: no pending task command"
-        self.bridge.feedback.emit(f"机器人 {addr[0]}:{addr[1]} 请求 read，已返回待发送信息：{command}")
+        self.bridge.command_delivery.emit(f"机器人 {addr[0]}:{addr[1]} 已发送 read，App 已返回任务指令",True)
+        self.bridge.feedback.emit(f"已返回机械臂任务信息：{command}")
         return command
 
     def _start_robot_project(self):
         robot_ip=self.robot_ip_edit.text().strip()
         def start():
             try:
-                from set_aubo_do06_high import set_do06_high
-                set_do06_high(robot_ip,30004,"aubo","123456")
-                self.bridge.command_delivery.emit(f"机械臂工程启动信号已发送：{robot_ip} 的 DO06 已置高，等待 read",True)
+                from set_aubo_do06_high import start_program_from_di06
+                start_program_from_di06(robot_ip,30004,"aubo","123456")
+                with self.pending_robot_command_lock:
+                    waiting=self.pending_robot_command is not None
+                message=(f"机械臂工程已启动：{robot_ip}，等待 read" if waiting else
+                         f"机械臂工程已启动：{robot_ip}，read 已接收且任务指令已返回")
+                self.bridge.command_delivery.emit(message,True)
             except Exception as exc:
                 self.bridge.command_delivery.emit(f"机械臂工程启动失败：{type(exc).__name__}: {exc}",False)
         threading.Thread(target=start,daemon=True).start()
 
     def _send_task_command(self,command):
-        host,port=self.command_target_host,self.command_target_port
+        host,port=self.robot_ip_edit.text().strip(),self.command_target_port
         def deliver():
             try:
                 size=send_task_command(host,port,command)
@@ -274,6 +290,11 @@ class MainWindow(QMainWindow):
     @Slot(str,bool)
     def _command_delivery_finished(self,message,ok):
         self.append_log(message)
+        self.robot_command_status.setText("机械臂指令："+message)
+        color='#ffd666' if ok and "等待 read" in message else ('#64d8cb' if ok else '#ff7875')
+        self.robot_command_status.setStyleSheet(
+            f"color:{color};font-size:12px;"
+        )
 
     @Slot(str)
     def _accept_feedback(self,text):
@@ -497,14 +518,16 @@ class MainWindow(QMainWindow):
             if not self.stage_documents[1]: self.stage_documents[1]=workflow; self._append_timed_output("\u5927\u6a21\u578b\u8f93\u51fa 02",workflow)
             self.path_label.setText(f"{path}\n{command}")
             self._append_timed_output("\u4efb\u52a1\u6307\u4ee4",command)
-            if self.voice_triggered_stage==1:
-                with self.pending_robot_command_lock:
-                    self.pending_robot_command=command
-                self.append_log("语音任务二分析完成，发送信息已存储，正在启动机械臂工程")
-                self.voice_triggered_stage=None
-                self._start_robot_project()
-            else:
-                self._send_task_command(command)
+            with self.pending_robot_command_lock:
+                self.pending_robot_command=command
+            waiting_message=(f"待发送指令已就绪，等待机械臂向 "
+                             f"{self.local_ip_edit.text().strip()}:{self.listen_port} 发送 read")
+            self.robot_command_status.setText("机械臂指令："+waiting_message)
+            self.robot_command_status.setStyleSheet("color:#ffd666;font-size:12px;")
+            self.append_log(waiting_message)
+            self.append_log("正在启动机械臂工程")
+            self.voice_triggered_stage=None
+            self._start_robot_project()
             self.append_log("02 \u6307\u4ee4\u5947\u5076\u524d\u7f00\uff1a"+";".join(f"{1 if index%2 else 2}{value}" for index,value in enumerate((item for item in command.split(";") if item),1))+";")
         else:
             path,command=value
