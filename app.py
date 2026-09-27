@@ -1,6 +1,7 @@
 """Competition GUI. Source stays ASCII; UI copy uses Unicode escapes."""
 from __future__ import annotations
-import os, sys, threading, time
+import os, socket, sys, threading, time
+import hikvision
 from datetime import datetime
 from pathlib import Path
 from PySide6.QtCore import QObject,QThread,QTimer,Qt,Signal,Slot
@@ -8,10 +9,26 @@ from PySide6.QtGui import QColor,QFont,QIntValidator,QPixmap,QTextCursor
 from PySide6.QtWidgets import (QApplication,QFrame,QHBoxLayout,QLabel,QLineEdit,QMainWindow,
     QPushButton,QProgressBar,QTextEdit,QVBoxLayout,QWidget)
 from competition_service import CompetitionService,IDENTIFY_IMAGE,WORKFLOW_IMAGE,cache_image_for_model
+from command_sender import send_task_command
 from server_multithread import CompetitionTCPServer
 from voice_client import RemoteSpeechClient
 
 INPUT_IMAGE = Path(r"E:\photo\color.jpg")
+
+def detect_local_ip():
+    """Return the preferred LAN IPv4 address without sending network data."""
+    try:
+        with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.168.34.200",8765))
+            address=probe.getsockname()[0]
+            if address and not address.startswith("127."): return address
+    except OSError:
+        pass
+    try:
+        addresses=socket.gethostbyname_ex(socket.gethostname())[2]
+        return next((address for address in addresses if not address.startswith("127.")),"未检测到")
+    except OSError:
+        return "未检测到"
 
 STYLE="""
 QWidget { background:#0b1220; color:#dce7f7; font-family:'Microsoft YaHei UI'; font-size:14px; }
@@ -72,6 +89,7 @@ class StageWorker(QObject):
 class NetworkBridge(QObject):
     request=Signal(object)
     feedback=Signal(str)
+    command_delivery=Signal(str,bool)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -79,11 +97,18 @@ class MainWindow(QMainWindow):
         self.service=CompetitionService(); self.active_thread=None; self.active_worker=None; self.selected_stage=0
         self.stage_ok=[False,False,False]; self.stage_values=[None,None,None]; self.network_request=None; self.network_queue=[]
         self.bridge=NetworkBridge(); self.bridge.request.connect(self._accept_network_request); self.bridge.feedback.connect(self._accept_feedback)
+        self.bridge.command_delivery.connect(self._command_delivery_finished)
         self.listen_host,self.listen_port="0.0.0.0",8888; self.server_error=None; self.listener_status_error=False
-        self.server=CompetitionTCPServer(self.listen_host,self.listen_port,self._network_command,self._network_feedback)
+        self.command_target_host=os.getenv("TASK_COMMAND_HOST","192.168.34.10")
+        self.command_target_port=int(os.getenv("TASK_COMMAND_PORT","8888"))
+        self.server=CompetitionTCPServer(self.listen_host,self.listen_port,self._network_command,self._network_feedback,self._robot_read_command)
         self.server_thread=threading.Thread(target=self._run_server,args=(self.server,),daemon=True)
         self.timer_started_at=None; self.countdown_seconds=300; self.timer_remaining=300; self.timer_running=False; self.timer_last_tick=None
         self.last_voice_text=""; self.last_voice_received_at=0.0
+        self.awaiting_voice_command=False
+        self.voice_triggered_stage=None
+        self.pending_robot_command=None
+        self.pending_robot_command_lock=threading.Lock()
         # Preview and model both use cached files; source documents stay read-only.
         self.stage_sources={0:INPUT_IMAGE,1:INPUT_IMAGE}; self.stage_images={}; self.image_cache_info={}
         self.input_image_signature=None
@@ -134,14 +159,15 @@ class MainWindow(QMainWindow):
         self.task_title=QLabel(); self.task_title.setObjectName('status'); ctl.addWidget(self.task_title)
         self.task_copy=QLabel(); self.task_copy.setObjectName('muted'); self.task_copy.setWordWrap(True); self.task_copy.setMinimumHeight(42); ctl.addWidget(self.task_copy)
         self.progress=QProgressBar(); self.progress.setRange(0,100); ctl.addWidget(self.progress); ctl.addStretch()
+        network_title=QLabel("网络信息"); network_title.setObjectName('status'); ctl.addWidget(network_title)
+        ctl.addWidget(QLabel("本机 IP（自动读取）"))
+        self.local_ip_edit=QLineEdit(detect_local_ip()); self.local_ip_edit.setReadOnly(True); ctl.addWidget(self.local_ip_edit)
+        ctl.addWidget(QLabel("机器人 IP（手动输入）"))
+        self.robot_ip_edit=QLineEdit("192.168.34.300"); ctl.addWidget(self.robot_ip_edit)
+        ctl.addWidget(QLabel("语音盒子 IP（手动输入）"))
+        self.voice_box_ip_edit=QLineEdit("192.168.34.200"); ctl.addWidget(self.voice_box_ip_edit)
         self.image_path_label=QLabel("\u4f7f\u7528\u7f13\u5b58\u538b\u7f29\u56fe\u7247\uff0c\u53ef\u62d6\u5165\u56fe\u7247"); self.image_path_label.setObjectName('muted'); self.image_path_label.setWordWrap(True); ctl.addWidget(self.image_path_label)
         self.path_label=QLabel("\u4efb\u52a1\u8f93\u51fa\u5c06\u663e\u793a\u5728\u8fd9\u91cc"); self.path_label.setObjectName('muted'); self.path_label.setWordWrap(True); ctl.addWidget(self.path_label); body.addWidget(controls)
-
-        ctl.addWidget(QLabel("ARM \u8bed\u97f3\u670d\u52a1"))
-        self.voice_url_edit=QLineEdit(os.getenv("AUBO_ARM_SPEECH_BASE_URL","http://192.168.34.200:8765")); self.voice_url_edit.setToolTip("ARM \u8bed\u97f3\u670d\u52a1 HTTP \u5730\u5740"); ctl.addWidget(self.voice_url_edit)
-        voice_buttons=QHBoxLayout(); self.voice_apply_button=QPushButton("\u8fde\u63a5"); self.voice_apply_button.clicked.connect(self._apply_voice_url); voice_buttons.addWidget(self.voice_apply_button)
-        self.voice_asr_button=QPushButton("\u8bc6\u522b"); self.voice_asr_button.setEnabled(False); self.voice_asr_button.clicked.connect(self._request_voice_asr); voice_buttons.addWidget(self.voice_asr_button); ctl.addLayout(voice_buttons)
-        self.voice_status=QLabel("\u7b49\u5f85\u542f\u52a8"); self.voice_status.setObjectName('muted'); self.voice_status.setWordWrap(True); ctl.addWidget(self.voice_status)
 
         right=QVBoxLayout(); right.setSpacing(12); body.addLayout(right,1)
         image_card=self._card(); image_layout=QVBoxLayout(image_card); image_layout.setContentsMargins(14,11,14,14)
@@ -159,26 +185,18 @@ class MainWindow(QMainWindow):
         self.flow_timer=QTimer(self); self.flow_timer.setInterval(35); self.flow_timer.timeout.connect(self._animate_flow); self.flow_index=None; self.flow_phase=0
 
     def _start_voice_client(self):
-        self.voice_client=RemoteSpeechClient(self.voice_url_edit.text(),self)
+        base_url=os.getenv("AUBO_ARM_SPEECH_BASE_URL","http://192.168.34.200:8765")
+        self.voice_client=RemoteSpeechClient(base_url,self,auto_listen=True,events_enabled=False)
         self.voice_client.status_changed.connect(self._voice_status_changed)
         self.voice_client.recognition_received.connect(self._voice_recognition_received)
         self.voice_client.error_received.connect(lambda message:self.append_log(f"\u8bed\u97f3\uff1a{message}"))
         self.voice_client.start()
 
-    def _apply_voice_url(self):
-        try:
-            self.voice_client.set_base_url(self.voice_url_edit.text())
-            self.voice_url_edit.setText(self.voice_client.base_url)
-        except ValueError as exc:
-            self._voice_status_changed(str(exc),False)
-
-    def _request_voice_asr(self):
-        self.voice_client.request_asr()
-
     @Slot(str,bool)
     def _voice_status_changed(self,text,connected):
-        self.voice_status.setText(text); self.voice_asr_button.setEnabled(connected)
-        self.voice_status.setStyleSheet(f"color:{'#64d8cb' if connected else '#8ea2bf'};")
+        if text==getattr(self,'last_voice_status',None): return
+        self.last_voice_status=text
+        self.append_log(f"\u8bed\u97f3\u72b6\u6001\uff1a{text}")
 
     @Slot(str,object)
     def _voice_recognition_received(self,text,payload):
@@ -187,14 +205,23 @@ class MainWindow(QMainWindow):
         self.last_voice_text=text
         self.last_voice_received_at=now
         self.append_log(f"\u8bed\u97f3\u8bc6\u522b\u7ed3\u679c\uff1a{text}")
+        if "小具同学" in text:
+            self.awaiting_voice_command=True
+            self.append_log("检测到唤醒词，正在播报就绪提示")
+            self.voice_client.listen_for_command_after_tts("我已就绪，请下达指令")
+            text=text.replace("小具同学","",1).strip(" ，,。！？!?")
+            if not text:
+                return
         command_stage=None
-        if "\u6267\u884c\u4efb\u52a1\u4e00" in text: command_stage=0
-        elif "\u6267\u884c\u4efb\u52a1\u4e8c" in text: command_stage=1
+        if "\u4efb\u52a1\u4e00" in text: command_stage=0
+        elif "\u4efb\u52a1\u4e8c" in text: command_stage=1
         if command_stage is None: return
+        self.awaiting_voice_command=False
         if self.active_thread or self.network_request:
             self.append_log(f"\u8bed\u97f3\u6307\u4ee4\u5df2\u5ffd\u7565\uff1a\u5f53\u524d\u6709\u4efb\u52a1\u6b63\u5728\u6267\u884c\uff0c\u65e0\u6cd5\u542f\u52a8\u4efb\u52a1{command_stage+1}")
             return
         self.append_log(f"\u8bed\u97f3\u6307\u4ee4\u5df2\u63a5\u53d7\uff1a\u6267\u884c\u4efb\u52a1{command_stage+1}")
+        self.voice_triggered_stage=command_stage
         self.select_stage(command_stage)
         self._execute_stage(command_stage)
 
@@ -211,6 +238,42 @@ class MainWindow(QMainWindow):
 
     def _network_feedback(self,text,addr):
         self.bridge.feedback.emit(text)
+
+    def _robot_read_command(self,addr):
+        with self.pending_robot_command_lock:
+            command=self.pending_robot_command
+            if command:
+                self.pending_robot_command=None
+        if not command:
+            self.bridge.feedback.emit(f"机器人 {addr[0]}:{addr[1]} 请求 read，但当前没有待发送信息")
+            return "Process failure: no pending task command"
+        self.bridge.feedback.emit(f"机器人 {addr[0]}:{addr[1]} 请求 read，已返回待发送信息：{command}")
+        return command
+
+    def _start_robot_project(self):
+        robot_ip=self.robot_ip_edit.text().strip()
+        def start():
+            try:
+                from set_aubo_do06_high import set_do06_high
+                set_do06_high(robot_ip,30004,"aubo","123456")
+                self.bridge.command_delivery.emit(f"机械臂工程启动信号已发送：{robot_ip} 的 DO06 已置高，等待 read",True)
+            except Exception as exc:
+                self.bridge.command_delivery.emit(f"机械臂工程启动失败：{type(exc).__name__}: {exc}",False)
+        threading.Thread(target=start,daemon=True).start()
+
+    def _send_task_command(self,command):
+        host,port=self.command_target_host,self.command_target_port
+        def deliver():
+            try:
+                size=send_task_command(host,port,command)
+                self.bridge.command_delivery.emit(f"\u4efb\u52a1\u6307\u4ee4\u5df2\u53d1\u9001\u5230 {host}:{port}\uff08{size} \u5b57\u8282\uff09",True)
+            except Exception as exc:
+                self.bridge.command_delivery.emit(f"\u4efb\u52a1\u6307\u4ee4\u53d1\u9001\u5931\u8d25 {host}:{port}\uff1a{type(exc).__name__}: {exc}",False)
+        threading.Thread(target=deliver,daemon=True).start()
+
+    @Slot(str,bool)
+    def _command_delivery_finished(self,message,ok):
+        self.append_log(message)
 
     @Slot(str)
     def _accept_feedback(self,text):
@@ -245,7 +308,7 @@ class MainWindow(QMainWindow):
         host='.'.join(str(value) for value in values)
         if host==self.listen_host and port==self.listen_port and self.server_thread.is_alive(): self._set_listener_status("\u25cf \u76d1\u542c",True); return
         self.server.shutdown(); self.server_thread.join(1.2); self.listen_host,self.listen_port=host,port; self.server_error=None
-        self.server=CompetitionTCPServer(host,port,self._network_command,self._network_feedback); self.server_thread=threading.Thread(target=self._run_server,args=(self.server,),daemon=True); self.server_thread.start(); self._set_listener_status("\u25cf \u76d1\u542c",True)
+        self.server=CompetitionTCPServer(host,port,self._network_command,self._network_feedback,self._robot_read_command); self.server_thread=threading.Thread(target=self._run_server,args=(self.server,),daemon=True); self.server_thread.start(); self._set_listener_status("\u25cf \u76d1\u542c",True)
 
     def _set_listener_status(self,text,ok):
         self.listener_status_error=not ok
@@ -361,16 +424,14 @@ class MainWindow(QMainWindow):
 
     def _execute_stage(self,index):
         if self.active_thread: return
-        if index in (0,1):
-            try:
-                self._reload_stage_image(index)
-                self.select_stage(index)
-            except (FileNotFoundError,OSError) as exc:
-                self._stage_error(index,f"{type(exc).__name__}: {exc}")
-                return
         self._begin_timer(); self.stage_ok[index]=False; self.start_task_button.setEnabled(False); self._start_flow(index)
-        identify_path=self.stage_images[0]; workflow_path=self.stage_images[1]
-        functions=[lambda callback,status:self.service.identify_stage(identify_path,callback,status),lambda callback,status:self.service.workflow_stage(workflow_path,callback,status),lambda _callback,_status:self.service.log_stage()]
+        camera_host=self.local_ip_edit.text().strip()
+        def captured_image(stage,status):
+            status(f"正在向本机拍照服务 {camera_host}:6000 发送 123…")
+            hikvision.one_shot(camera_host)
+            status("拍照完成，正在读取最新图片…")
+            return self._reload_stage_image(stage)
+        functions=[lambda callback,status:self.service.identify_stage(captured_image(0,status),callback,status),lambda callback,status:self.service.workflow_stage(captured_image(1,status),callback,status),lambda _callback,_status:self.service.log_stage()]
         self.stream_started=False; self.stage_documents[index]=""
         pending=("\u6b63\u5728\u8c03\u7528\u89c6\u89c9\u6a21\u578b\u2026","\u6b63\u5728\u751f\u6210\u5de5\u4f5c\u6d41\u2026","\u6b63\u5728\u751f\u6210\u4efb\u52a1\u8bb0\u5f55\u2026")[index]
         self._append_output(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}] {index+1:02d} \u5de5\u7a0b\u542f\u52a8\n===== {TASK_NAMES[index]} =====\n{pending}\n")
@@ -401,6 +462,12 @@ class MainWindow(QMainWindow):
         self._append_output(text)
 
     def _stage_status(self,index,text):
+        if text.startswith("QWEN_VL_RESULT\x00"):
+            _marker,content=text.split("\x00",1)
+            if content.strip():
+                self.append_log("正在播报视觉大模型识别结果")
+                self.voice_client.request_tts(content.strip())
+            return
         if text.startswith("MODEL_STREAM_START\x00"):
             _marker,label=text.split("\x00",1)
             self._append_timed_output(label)
@@ -430,6 +497,14 @@ class MainWindow(QMainWindow):
             if not self.stage_documents[1]: self.stage_documents[1]=workflow; self._append_timed_output("\u5927\u6a21\u578b\u8f93\u51fa 02",workflow)
             self.path_label.setText(f"{path}\n{command}")
             self._append_timed_output("\u4efb\u52a1\u6307\u4ee4",command)
+            if self.voice_triggered_stage==1:
+                with self.pending_robot_command_lock:
+                    self.pending_robot_command=command
+                self.append_log("语音任务二分析完成，发送信息已存储，正在启动机械臂工程")
+                self.voice_triggered_stage=None
+                self._start_robot_project()
+            else:
+                self._send_task_command(command)
             self.append_log("02 \u6307\u4ee4\u5947\u5076\u524d\u7f00\uff1a"+";".join(f"{1 if index%2 else 2}{value}" for index,value in enumerate((item for item in command.split(";") if item),1))+";")
         else:
             path,command=value
@@ -452,6 +527,7 @@ class MainWindow(QMainWindow):
         if self.network_request: QTimer.singleShot(100,self._run_next_network_stage)
 
     def _stage_error(self,index,error):
+        if self.voice_triggered_stage==index: self.voice_triggered_stage=None
         self._stop_flow(); self.stage_ok[index]=False; self.progress.setRange(0,100)
         self.stage_documents[index]=f"\u4efb\u52a1\u5931\u8d25\uff0c\u53ef\u91cd\u8bd5\u3002\n{error}"
         self._append_output("\n"+self.stage_documents[index]+"\n")

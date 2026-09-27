@@ -79,6 +79,8 @@ def identify_obj(image_path, text, on_chunk=None, on_status=None, report_reasoni
                 content=str(content); result+=content
                 if on_chunk: on_chunk(content)
         print(f"识别结果: {result}")
+        if on_status:
+            on_status("QWEN_VL_RESULT\x00" + result)
         return result
     except Exception as e:
         if isinstance(e, httpx.TimeoutException):
@@ -93,7 +95,7 @@ def identify_obj(image_path, text, on_chunk=None, on_status=None, report_reasoni
 def generate_workflow_json(image_path, file_name, on_chunk=None, on_status=None):
     def vision_status(text):
         if not on_status: return
-        on_status(text if text.startswith("MODEL_OUTPUT\x00") else "文字识别："+text)
+        on_status(text if text.startswith(("MODEL_OUTPUT\x00", "QWEN_VL_RESULT\x00")) else "文字识别："+text)
     if on_status: on_status("MODEL_STREAM_START\x00图片文字识别")
     task_description=identify_obj(
         image_path,

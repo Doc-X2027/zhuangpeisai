@@ -38,7 +38,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "[4/4] Updating the wake word configuration ..."
-& ssh -t $remote "chmod 700 '$remoteScript' && '$remoteScript'"
+& ssh -t $remote "sed -i 's/\r$//' '$remoteScript' && chmod 700 '$remoteScript' && '$remoteScript'"
 if ($LASTEXITCODE -ne 0) {
     throw "Remote keyword update failed with exit code $LASTEXITCODE. Read the error above."
 }

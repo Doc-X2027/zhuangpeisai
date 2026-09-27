@@ -6,9 +6,10 @@ from typing import Callable
 
 class CompetitionTCPServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 8888, command_handler: Callable | None = None,
-                 feedback_handler: Callable | None = None) -> None:
+                 feedback_handler: Callable | None = None, read_handler: Callable | None = None) -> None:
         self.host, self.port, self.command_handler = host, port, command_handler
         self.feedback_handler = feedback_handler
+        self.read_handler = read_handler
         self._socket = None
         self._stop = threading.Event()
 
@@ -35,7 +36,9 @@ class CompetitionTCPServer:
             lowered=first_data.lower()
             command=next((name for name in ("identify","planning","auto") if lowered.startswith(name.encode("ascii"))),"")
             initial_feedback=first_data[len(command):] if command else b""
-            if command not in ("identify","planning","auto"):
+            if lowered.strip()==b"read" and self.read_handler:
+                response=self.read_handler(addr)
+            elif command not in ("identify","planning","auto"):
                 text=first_data.decode("utf-8",errors="replace")
                 if self.feedback_handler and text:
                     self.feedback_handler(text,addr)
