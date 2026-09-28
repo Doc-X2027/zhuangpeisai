@@ -15,22 +15,17 @@ from server_multithread import CompetitionTCPServer
 from voice_client import RemoteSpeechClient
 
 INPUT_IMAGE = Path(r"E:\photo\color.jpg")
-WAKE_WORDS = ("小聚同学",)
-VOICE_COMMANDS = (("执行任务一", 0), ("执行任务二", 1))
+WAKE_WORDS = ("小具同学",)
+VOICE_COMMANDS = (("任务一", 0), ("任务二", 1))
+VOICE_READY_PROMPT = "我已就绪，请下达指令"
+VOICE_COMMAND_TIMEOUT_MS = 15_000
 
-def task_one_spoken_names(text):
-    """Return only object names from Qwen's ``**name**: description`` output."""
-    text=str(text or "")
-    headings=re.findall(r"\*\*(.+?)\*\*\s*[：:]",text,flags=re.S)
-    if not headings:
-        headings=re.findall(r"(?:^|\n)\s*(?:[-*]\s*)?(?:\d+[.、]\s*)?([^\n：:]{1,40})[：:]",text)
-    names=[]
-    for heading in headings:
-        name=re.sub(r"^\s*(?:识别示例|识别结果|物体名称)\s*[：:]\s*","",heading.strip())
-        name=re.sub(r"^\s*\d+[.、]\s*","",name).strip(" *#\t\r\n")
-        if name and name not in names:
-            names.append(name)
-    return "、".join(names)
+def model_result_for_speech(text):
+    """Keep Qwen's complete result while removing Markdown-only notation."""
+    text=str(text or "").strip()
+    text=re.sub(r"\*\*(.+?)\*\*",r"\1",text,flags=re.S)
+    text=re.sub(r"[`#]", "", text)
+    return text.strip()
 
 def detect_local_ip():
     """Return the configured physical Ethernet IPv4, even when its cable is unplugged."""
@@ -125,6 +120,8 @@ class MainWindow(QMainWindow):
         self.voice_triggered_stage=None
         self.voice_task_listening_paused=False
         self.voice_result_tts_pending=False
+        self.voice_result_tts_requested=False
+        self.voice_command_session=0
         self.pending_robot_command=None
         self.pending_robot_command_lock=threading.Lock()
         # Preview and model both use cached files; source documents stay read-only.
@@ -237,12 +234,22 @@ class MainWindow(QMainWindow):
         self.append_log(f"\u8bed\u97f3\u8bc6\u522b\u7ed3\u679c\uff1a{text}")
         matched_wake_word=next((word for word in WAKE_WORDS if word in text),None)
         if matched_wake_word:
-            self.awaiting_voice_command=True
-            self.append_log("检测到唤醒词，正在播报就绪提示")
-            self.voice_client.listen_for_command_after_tts("我已就绪，请下达指令")
-            text=text.replace(matched_wake_word,"",1).strip(" ，,。！？!?")
-            if not text:
+            if self.active_thread or self.network_request or self.voice_task_listening_paused:
+                self.append_log("唤醒词已忽略：当前任务尚未完成")
                 return
+            if self.awaiting_voice_command:
+                self.append_log("重复唤醒词已忽略：正在等待任务指令")
+                return
+            self.awaiting_voice_command=True
+            self.voice_command_session+=1
+            self.append_log("检测到唤醒词，正在播报就绪提示")
+            self.voice_client.listen_for_command_after_tts(VOICE_READY_PROMPT)
+            # The wake-up utterance is only used to enter command mode.  Wait
+            # until the ready prompt has finished, then recognize the next
+            # utterance as the task command so the prompt cannot mask speech.
+            return
+        if not self.awaiting_voice_command:
+            return
         command_stage=next((stage for command,stage in VOICE_COMMANDS if command in text),None)
         if command_stage is None: return
         self.awaiting_voice_command=False
@@ -252,22 +259,34 @@ class MainWindow(QMainWindow):
         self.append_log(f"\u8bed\u97f3\u6307\u4ee4\u5df2\u63a5\u53d7\uff1a\u6267\u884c\u4efb\u52a1{command_stage+1}")
         self.voice_triggered_stage=command_stage
         self.voice_task_listening_paused=True
+        self.voice_result_tts_requested=False
         self.voice_client.pause_auto_listen()
         self.select_stage(command_stage)
         self._execute_stage(command_stage)
 
     @Slot(str,bool)
-    def _voice_tts_finished(self,_text,_ok):
+    def _voice_tts_finished(self,text,_ok):
+        if text==VOICE_READY_PROMPT and self.awaiting_voice_command:
+            session=self.voice_command_session
+            QTimer.singleShot(VOICE_COMMAND_TIMEOUT_MS,lambda session=session:self._expire_voice_command(session))
+            return
         if not self.voice_result_tts_pending:
             return
         self.voice_result_tts_pending=False
         self._resume_voice_after_result()
+
+    def _expire_voice_command(self,session):
+        if session!=self.voice_command_session or not self.awaiting_voice_command:
+            return
+        self.awaiting_voice_command=False
+        self.append_log("语音指令等待超时，已恢复静默唤醒监听")
 
     def _resume_voice_after_result(self):
         if not self.voice_task_listening_paused or self.active_thread or self.voice_result_tts_pending:
             return
         self.voice_task_listening_paused=False
         self.voice_triggered_stage=None
+        self.voice_result_tts_requested=False
         self.voice_client.resume_auto_listen()
         self.append_log("大模型识别结果播报完成，已恢复唤醒监听")
 
@@ -532,15 +551,17 @@ class MainWindow(QMainWindow):
     def _stage_status(self,index,text):
         if text.startswith("QWEN_VL_RESULT\x00"):
             _marker,content=text.split("\x00",1)
-            if content.strip():
-                spoken_text=task_one_spoken_names(content) if index==0 else content.strip()
-                if not spoken_text:
-                    self.append_log("任务一识别结果中未找到可播报的物体名称")
-                    return
-                if self.voice_task_listening_paused and self.voice_triggered_stage==index:
-                    self.voice_result_tts_pending=True
-                self.append_log(f"正在播报 qwen-vl-plus 识别内容：{spoken_text}")
-                self.voice_client.request_tts(spoken_text)
+            is_voice_task=(self.voice_task_listening_paused and self.voice_triggered_stage==index)
+            if not is_voice_task or self.voice_result_tts_requested:
+                return
+            spoken_text=model_result_for_speech(content)
+            if not spoken_text:
+                self.append_log("qwen-vl-plus 识别结果为空，本次不播报")
+                return
+            self.voice_result_tts_requested=True
+            self.voice_result_tts_pending=True
+            self.append_log(f"正在播报 qwen-vl-plus 识别内容：{spoken_text}")
+            self.voice_client.request_tts(spoken_text)
             return
         if text.startswith("MODEL_STREAM_START\x00"):
             _marker,label=text.split("\x00",1)

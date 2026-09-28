@@ -110,14 +110,14 @@ class RemoteSpeechClient(QObject):
         if wakeup_required is None:
             # Use short-utterance ASR and let the Windows client match the exact
             # phrase.  The packaged keyword table accepts several homophones,
-            # so it cannot enforce an exact "小聚同学" match by itself.
+            # so it cannot enforce an exact "小具同学" match by itself.
             wakeup_required = False
         self._next_wakeup_required = True
         payload = {
             "request_id": str(uuid.uuid4()),
             "mode": "live_capture",
             "wakeup_required": wakeup_required,
-            "start_timeout_s": 2.0,
+            "start_timeout_s": 8.0,
             "max_record_seconds": 6.0,
             "vad_threshold": 0.5,
             "language": "zh-CN",
@@ -237,7 +237,8 @@ class RemoteSpeechClient(QObject):
             if not payload.get("ok"):
                 error_code = payload.get("error_code", "ASR_FAILED")
                 if not (self.auto_listen and error_code in (
-                    "WAKEUP_TIMEOUT", "ASR_TIMEOUT", "NO_SPEECH_DETECTED"
+                    "WAKEUP_TIMEOUT", "ASR_TIMEOUT", "NO_SPEECH_DETECTED",
+                    "NO_AUDIO_CAPTURED",
                 )):
                     self.error_received.emit(f"{error_code}：{payload.get('message', '语音识别失败')}")
                 return

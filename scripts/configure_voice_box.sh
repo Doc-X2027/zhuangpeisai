@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Business wake phrase. Exact matching is performed by the Windows ASR client.
-KEYWORD="小聚同学"
+KEYWORD="小具同学"
 
 CONFIG_CANDIDATES=(
     "/home/bst/SpeechRelease/SpeechReleaseServer/speech_server.json"
@@ -55,6 +55,14 @@ def replace_keyword(value):
             replace_keyword(child)
 
 replace_keyword(data)
+
+# Keep the wake-word aliases in sync as well.  Otherwise rerunning this helper
+# can leave the service advertising an obsolete pronunciation alias.
+wakeup = data.get("wakeup")
+if isinstance(wakeup, dict) and wakeup.get("aliases") != [keyword]:
+    wakeup["aliases"] = [keyword]
+    changed += 1
+
 if changed == 0:
     # Distinguish an already-correct file from a file with no keyword setting.
     def contains_keyword(value):
